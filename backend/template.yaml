@@ -1,0 +1,859 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SpendWise - Smart Personal Finance Management System
+  Production-grade AWS Serverless Backend with DynamoDB, S3, Cognito, and API Gateway HTTP API.
+
+Globals:
+  Function:
+    Timeout: 15
+    MemorySize: 512
+    Runtime: nodejs20.x
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        CORS_ALLOWED_ORIGIN: !Ref CorsAllowedOrigin
+        USERS_TABLE: !Ref UsersTable
+        TRANSACTIONS_TABLE: !Ref TransactionsTable
+        ACCOUNTS_TABLE: !Ref AccountsTable
+        BUDGETS_TABLE: !Ref BudgetsTable
+        INVESTMENTS_TABLE: !Ref InvestmentsTable
+        LOANS_TABLE: !Ref LoansTable
+        LOAN_REPAYMENTS_TABLE: !Ref LoanRepaymentsTable
+        IMPORT_BATCHES_TABLE: !Ref ImportBatchesTable
+        TRANSACTION_RULES_TABLE: !Ref TransactionRulesTable
+        FILE_METADATA_TABLE: !Ref FileMetadataTable
+        STORAGE_BUCKET_NAME: !Ref SpendWiseStorageBucket
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Deployment stage environment.
+
+  CorsAllowedOrigin:
+    Type: String
+    Default: '*'
+    Description: Allowed CORS origin for frontend client (e.g. http://localhost:3000 or production domain).
+
+Resources:
+  # =========================================================================
+  # 1. COGNITO AUTHENTICATION
+  # =========================================================================
+  SpendWiseUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub spendwise-userpool-${Stage}
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+        - Name: name
+          Required: false
+          Mutable: true
+
+  SpendWiseUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub spendwise-frontend-client-${Stage}
+      UserPoolId: !Ref SpendWiseUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+      PreventUserExistenceErrors: ENABLED
+
+  # =========================================================================
+  # 2. API GATEWAY HTTP API WITH JWT AUTHORIZER
+  # =========================================================================
+  SpendWiseHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref CorsAllowedOrigin
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Amz-Date
+          - X-Api-Key
+          - X-Amz-Security-Token
+          - X-User-Id
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        MaxAge: 3600
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${SpendWiseUserPool}"
+              audience:
+                - !Ref SpendWiseUserPoolClient
+
+  # =========================================================================
+  # 3. PRIVATE S3 STORAGE BUCKET
+  # =========================================================================
+  SpendWiseStorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "spendwise-storage-${AWS::AccountId}-${AWS::Region}-${Stage}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - !Ref CorsAllowedOrigin
+            MaxAge: 3600
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 2
+
+  # =========================================================================
+  # 4. AMAZON DYNAMODB APPLICATION TABLES
+  # =========================================================================
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-users-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  TransactionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-transactions-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: transactionId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+        - AttributeName: fingerprint
+          AttributeType: S
+        - AttributeName: category
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: transactionId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: userId-date-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: userId-fingerprint-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: fingerprint
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+        - IndexName: userId-category-date-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: category
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  AccountsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-accounts-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: accountId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: accountId
+          KeyType: RANGE
+
+  BudgetsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-budgets-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: budgetId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: budgetId
+          KeyType: RANGE
+
+  InvestmentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-investments-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: investmentId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: investmentId
+          KeyType: RANGE
+
+  LoansTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-loans-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: loanId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: loanId
+          KeyType: RANGE
+
+  LoanRepaymentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-loan-repayments-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: repaymentId
+          AttributeType: S
+        - AttributeName: loanId
+          AttributeType: S
+        - AttributeName: paymentDate
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: repaymentId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: loanId-paymentDate-index
+          KeySchema:
+            - AttributeName: loanId
+              KeyType: HASH
+            - AttributeName: paymentDate
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  ImportBatchesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-import-batches-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: importBatchId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: importBatchId
+          KeyType: RANGE
+
+  TransactionRulesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-transaction-rules-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: ruleId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: ruleId
+          KeyType: RANGE
+
+  FileMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub spendwise-file-metadata-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: fileId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: fileId
+          KeyType: RANGE
+
+  # =========================================================================
+  # 5. LAMBDA FUNCTIONS
+  # =========================================================================
+
+  # Profile Function
+  ProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/profile/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        GetProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /profile
+            Method: GET
+        PutProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /profile
+            Method: PUT
+
+  # Accounts Function
+  AccountsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/accounts/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AccountsTable
+      Events:
+        ListAccounts:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /accounts
+            Method: GET
+        CreateAccount:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /accounts
+            Method: POST
+        GetAccount:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /accounts/{accountId}
+            Method: GET
+        UpdateAccount:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /accounts/{accountId}
+            Method: PUT
+        DeleteAccount:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /accounts/{accountId}
+            Method: DELETE
+
+  # Transactions Function
+  TransactionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/transactions/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TransactionsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TransactionRulesTable
+      Events:
+        ListTransactions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions
+            Method: GET
+        CreateTransaction:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions
+            Method: POST
+        GetTransaction:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions/{transactionId}
+            Method: GET
+        UpdateTransaction:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions/{transactionId}
+            Method: PUT
+        DeleteTransaction:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions/{transactionId}
+            Method: DELETE
+        BatchTransactions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions/batch
+            Method: POST
+
+  # Categorisation Function
+  CategorisationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/categorisation/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TransactionRulesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TransactionsTable
+      Events:
+        AnalyseTransaction:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions/analyse
+            Method: POST
+        CategoriseTransaction:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transactions/{transactionId}/categorise
+            Method: POST
+        ListRules:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transaction-rules
+            Method: GET
+        CreateRule:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transaction-rules
+            Method: POST
+        UpdateRule:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transaction-rules/{ruleId}
+            Method: PUT
+        DeleteRule:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /transaction-rules/{ruleId}
+            Method: DELETE
+
+  # Investments Function
+  InvestmentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/investments/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InvestmentsTable
+      Events:
+        ListInvestments:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /investments
+            Method: GET
+        CreateInvestment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /investments
+            Method: POST
+        GetInvestment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /investments/{investmentId}
+            Method: GET
+        UpdateInvestment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /investments/{investmentId}
+            Method: PUT
+        DeleteInvestment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /investments/{investmentId}
+            Method: DELETE
+
+  # Loans Function
+  LoansFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/loans/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LoansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LoanRepaymentsTable
+      Events:
+        ListLoans:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /loans
+            Method: GET
+        CreateLoan:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /loans
+            Method: POST
+        GetLoan:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /loans/{loanId}
+            Method: GET
+        UpdateLoan:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /loans/{loanId}
+            Method: PUT
+        DeleteLoan:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /loans/{loanId}
+            Method: DELETE
+        ListRepayments:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /loans/{loanId}/repayments
+            Method: GET
+        CreateRepayment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /loans/{loanId}/repayments
+            Method: POST
+
+  # Budgets Function
+  BudgetsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/budgets/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BudgetsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TransactionsTable
+      Events:
+        ListBudgets:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /budgets
+            Method: GET
+        CreateBudget:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /budgets
+            Method: POST
+        UpdateBudget:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /budgets/{budgetId}
+            Method: PUT
+        DeleteBudget:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /budgets/{budgetId}
+            Method: DELETE
+        BudgetSummary:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /budgets/summary
+            Method: GET
+
+  # Dashboard Function
+  DashboardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/dashboard/handler.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TransactionsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref InvestmentsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref LoansTable
+      Events:
+        DashboardSummary:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /dashboard/summary
+            Method: GET
+
+  # Analytics Function
+  AnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/analytics/handler.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TransactionsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref InvestmentsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref LoansTable
+      Events:
+        AnalyticsCashflow:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /analytics/cashflow
+            Method: GET
+        AnalyticsCategories:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /analytics/categories
+            Method: GET
+        AnalyticsPaymentSources:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /analytics/payment-sources
+            Method: GET
+        AnalyticsInvestments:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /analytics/investments
+            Method: GET
+        AnalyticsDebt:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /analytics/debt
+            Method: GET
+
+  # Insights Function
+  InsightsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/insights/handler.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TransactionsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref InvestmentsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref LoansTable
+      Events:
+        GetInsights:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /insights
+            Method: GET
+
+  # Imports Function
+  ImportsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/imports/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ImportBatchesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TransactionsTable
+        - S3CrudPolicy:
+            BucketName: !Ref SpendWiseStorageBucket
+      Events:
+        CreateImport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /imports
+            Method: POST
+        GetImportStatus:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /imports/{importBatchId}
+            Method: GET
+        GetImportErrors:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /imports/{importBatchId}/errors
+            Method: GET
+        ConfirmImport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /imports/{importBatchId}/confirm
+            Method: POST
+        CancelImport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /imports/{importBatchId}
+            Method: DELETE
+
+  # Uploads Function
+  UploadsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/functions/uploads/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FileMetadataTable
+        - S3CrudPolicy:
+            BucketName: !Ref SpendWiseStorageBucket
+      Events:
+        GetPresignedUploadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /uploads/presigned-url
+            Method: POST
+        GetPresignedDownloadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /uploads/{fileId}/download-url
+            Method: GET
+        DeleteFile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SpendWiseHttpApi
+            Path: /uploads/{fileId}
+            Method: DELETE
+
+# =========================================================================
+# 6. RESOURCE OUTPUTS
+# =========================================================================
+Outputs:
+  HttpApiEndpoint:
+    Description: HTTP API Gateway Base URL
+    Value: !Sub "https://${SpendWiseHttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}"
+    Export:
+      Name: !Sub "${AWS::StackName}-HttpApiEndpoint"
+
+  CognitoUserPoolId:
+    Description: Amazon Cognito User Pool ID
+    Value: !Ref SpendWiseUserPool
+    Export:
+      Name: !Sub "${AWS::StackName}-CognitoUserPoolId"
+
+  CognitoUserPoolClientId:
+    Description: Amazon Cognito User Pool App Client ID
+    Value: !Ref SpendWiseUserPoolClient
+    Export:
+      Name: !Sub "${AWS::StackName}-CognitoUserPoolClientId"
+
+  StorageBucketName:
+    Description: Private S3 Storage Bucket
+    Value: !Ref SpendWiseStorageBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-StorageBucketName"
+
+  AwsRegion:
+    Description: Deployed AWS Region
+    Value: !Ref "AWS::Region"

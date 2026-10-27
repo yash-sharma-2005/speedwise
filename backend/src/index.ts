@@ -1,0 +1,21 @@
+export * from './types/index.js';
+export * from './shared/auth/index.js';
+export * from './shared/db/index.js';
+export * from './shared/errors/index.js';
+export * from './shared/financial/index.js';
+export * from './shared/categorisation/index.js';
+export * from './shared/http/index.js';
+export * from './shared/validation/index.js';
+
+export { handler as profileHandler } from './functions/profile/handler.js';
+export { handler as accountsHandler } from './functions/accounts/handler.js';
+export { handler as transactionsHandler } from './functions/transactions/handler.js';
+export { handler as categorisationHandler } from './functions/categorisation/handler.js';
+export { handler as investmentsHandler } from './functions/investments/handler.js';
+export { handler as loansHandler } from './functions/loans/handler.js';
+export { handler as budgetsHandler } from './functions/budgets/handler.js';
+export { handler as dashboardHandler } from './functions/dashboard/handler.js';
+export { handler as analyticsHandler } from './functions/analytics/handler.js';
+export { handler as insightsHandler } from './functions/insights/handler.js';
+export { handler as importsHandler } from './functions/imports/handler.js';
+export { handler as uploadsHandler } from './functions/uploads/handler.js';

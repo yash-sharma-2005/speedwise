@@ -1,0 +1,555 @@
+openapi: 3.0.3
+info:
+  title: SpendWise Serverless Backend API
+  description: >
+    Production-grade AWS Serverless HTTP API for SpendWise - Smart Personal Finance Management System.
+    Provides personal ledger management, smart categorisation, statement imports, portfolio analytics,
+    budget tracking, debt amortization, and private file uploads.
+  version: 1.0.0
+servers:
+  - url: https://{apiId}.execute-api.ap-south-1.amazonaws.com/{stage}
+    description: Amazon API Gateway HTTP API
+    variables:
+      apiId:
+        default: example
+      stage:
+        default: dev
+
+paths:
+  /profile:
+    get:
+      summary: Retrieve authenticated user profile
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: User profile retrieved successfully
+    put:
+      summary: Update user profile
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: User profile updated successfully
+
+  /accounts:
+    get:
+      summary: List user financial accounts
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: List of accounts
+    post:
+      summary: Create new financial account
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Account created successfully
+
+  /accounts/{accountId}:
+    get:
+      summary: Get account details
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account details
+    put:
+      summary: Update financial account
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account updated
+    delete:
+      summary: Delete or deactivate account
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account deleted
+
+  /transactions:
+    get:
+      summary: List transactions with date, category, type, and pagination filters
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+        - name: endDate
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [debit, credit]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: nextToken
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated list of transactions
+    post:
+      summary: Create a transaction
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Transaction created
+
+  /transactions/{transactionId}:
+    get:
+      summary: Retrieve single transaction
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transaction details
+    put:
+      summary: Update transaction
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transaction updated
+    delete:
+      summary: Delete transaction
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transaction deleted
+
+  /transactions/batch:
+    post:
+      summary: Batch write validated transactions with partial failure handling
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Batch processed with accepted, rejected, and duplicate report
+
+  /transactions/analyse:
+    post:
+      summary: Smart Transaction Analysis Engine
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Suggestion with confidence score, explainable reason, and needsReview flag
+
+  /transactions/{transactionId}/categorise:
+    post:
+      summary: Confirm approved category and optionally create reusable merchant rule
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transaction updated with approved categorization
+
+  /transaction-rules:
+    get:
+      summary: List user merchant categorization rules
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: List of custom rules
+    post:
+      summary: Create custom merchant rule
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Rule created
+
+  /budgets:
+    get:
+      summary: List budgets
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: List of budgets
+    post:
+      summary: Create budget
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Budget created
+
+  /budgets/{budgetId}:
+    put:
+      summary: Update budget
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: budgetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Budget updated
+    delete:
+      summary: Delete budget
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: budgetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Budget deleted
+
+  /budgets/summary:
+    get:
+      summary: Period budget breakdown with dynamic actual spent computed from transactions
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Budget summary
+
+  /investments:
+    get:
+      summary: List investments
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: List of investments
+    post:
+      summary: Create investment
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Investment created
+
+  /investments/{investmentId}:
+    get:
+      summary: Get investment
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: investmentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Investment details
+    put:
+      summary: Update investment
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: investmentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Investment updated
+    delete:
+      summary: Delete investment
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: investmentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Investment deleted
+
+  /loans:
+    get:
+      summary: List loans
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: List of loans
+    post:
+      summary: Create loan
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Loan created
+
+  /loans/{loanId}:
+    get:
+      summary: Get loan
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: loanId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Loan details
+    put:
+      summary: Update loan
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: loanId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Loan updated
+    delete:
+      summary: Delete loan
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: loanId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Loan deleted
+
+  /loans/{loanId}/repayments:
+    get:
+      summary: List repayments for a loan
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: loanId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Repayment history
+    post:
+      summary: Record loan repayment
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: loanId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Repayment recorded
+
+  /dashboard/summary:
+    get:
+      summary: Authoritative financial summary calculated from stored records
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Authoritative totals, savings rate, and available balance
+
+  /analytics/cashflow:
+    get:
+      summary: Monthly and weekly cashflow trends
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Cashflow analysis
+
+  /analytics/categories:
+    get:
+      summary: Category spending breakdown
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Spending by category
+
+  /analytics/payment-sources:
+    get:
+      summary: Spending by payment channel
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Outflow breakdown
+
+  /analytics/investments:
+    get:
+      summary: Portfolio asset allocation
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Investment allocation
+
+  /analytics/debt:
+    get:
+      summary: Debt composition and monthly obligations
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Debt analysis
+
+  /insights:
+    get:
+      summary: Proactive financial insights
+      security:
+        - CognitoAuth: []
+      responses:
+        '200':
+          description: Generated rule-based insights
+
+  /imports:
+    post:
+      summary: Initialize import batch and generate S3 presigned upload URL
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Batch initialized with presigned upload URL
+
+  /imports/{importBatchId}:
+    get:
+      summary: Retrieve import status
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: importBatchId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Import status
+
+  /imports/{importBatchId}/confirm:
+    post:
+      summary: Commit parsed and user-confirmed transactions to DynamoDB
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: importBatchId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transactions persisted
+
+  /uploads/presigned-url:
+    post:
+      summary: Issue private S3 presigned upload URL for receipts/files
+      security:
+        - CognitoAuth: []
+      responses:
+        '201':
+          description: Presigned upload URL
+
+  /uploads/{fileId}/download-url:
+    get:
+      summary: Generate private short-lived download URL after ownership verification
+      security:
+        - CognitoAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Presigned download URL
+
+components:
+  securitySchemes:
+    CognitoAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
